@@ -1,26 +1,6 @@
-use std::collections::HashMap;
+#![deny(missing_docs)]
+//! A simple key/value store.
 
-pub struct KvStore {
-    map: HashMap<String, String>,
-}
+pub use kv::KvStore;
 
-impl KvStore {
-    pub fn new() -> KvStore {
-        KvStore {
-            map: HashMap::new()
-        }
-    }
-
-    pub fn get(&self, key: String) -> Option<String> {
-        unimplemented!();
-    }
-
-    pub fn set(&self, key: String, val: String) -> () {
-        unimplemented!();
-    }
-
-    pub fn remove(&self, key: String) -> () {
-        unimplemented!();
-    }
-
-}
+mod kv;
