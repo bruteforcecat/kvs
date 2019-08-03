@@ -1,57 +1,49 @@
-extern crate clap;
-use clap::{App, Arg, SubCommand};
+extern crate structopt;
+
 use std::process;
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "KVS", about = "A Key-Value Store CLI")]
+enum Opt {
+    /// Sets a string key/value pair
+    #[structopt(name = "set")]
+    Set {
+        #[structopt(help = "The key string of the key/value pair")]
+        key: String,
+
+        #[structopt(help = "The value string of the key/value pair")]
+        value: String,
+    },
+
+    /// Gets a string value according to passed string key
+    #[structopt(name = "get")]
+    Get {
+        #[structopt(help = "The key string of the key/value pair")]
+        key: String,
+    },
+
+    /// Removes the string key/value pair according to the passed string key
+    #[structopt(name = "rm")]
+    Remove {
+        #[structopt(help = "The key string of the key/value pair")]
+        key: String,
+    },
+}
 
 fn main() {
-    let matches = App::new("KVS")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .subcommand(
-            SubCommand::with_name("set")
-                .about("Set the value of a string key to a string")
-                .arg(Arg::with_name("KEY").help("A string key").required(true))
-                .arg(
-                    Arg::with_name("Value")
-                        .help("A string value")
-                        .required(true),
-                ),
-        )
-        .subcommand(
-            SubCommand::with_name("get")
-                .about("Get the value of a string key")
-                .arg(Arg::with_name("KEY").help("A string key").required(true)),
-        )
-        .subcommand(
-            SubCommand::with_name("rm")
-                .about("Remove the value of a string key")
-                .arg(Arg::with_name("KEY").help("A string key").required(true)),
-        )
-        .subcommand(
-            SubCommand::with_name("set")
-                .about("Set the value of a string key to a string")
-                .arg(Arg::with_name("KEY").help("A string key").required(true))
-                .arg(
-                    Arg::with_name("Value")
-                        .help("A string value")
-                        .required(true),
-                ),
-        )
-        .get_matches();
-
-    match matches.subcommand() {
-        ("set", _) => {
+    match Opt::from_args() {
+        Opt::Set { .. } => {
             eprintln!("unimplemented");
             process::exit(1)
         }
-        ("get", _) => {
+        Opt::Get { .. } => {
             eprintln!("unimplemented");
             process::exit(1)
         }
-        ("rm", _) => {
+        Opt::Remove { .. } => {
             eprintln!("unimplemented");
             process::exit(1)
         }
-        _ => unreachable!(),
     }
 }
