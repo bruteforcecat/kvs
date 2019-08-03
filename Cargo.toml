@@ -5,7 +5,13 @@ authors = ["KaFai Choi <kafaicoder@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-assert_cmd = "0.11.1"
-predicates = "1.0.1"
 clap = "2.33.0"
 structopt = "0.2.18"
+tempfile = "3.0.7"
+walkdir = "2.2.7"
+failure = "0.1.5"
+failure_derive = "0.1.5"
+
+[dev-dependencies]
+assert_cmd = "0.11.0"
+predicates = "1.0.0"
