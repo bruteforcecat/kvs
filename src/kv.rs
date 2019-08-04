@@ -5,27 +5,25 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader};
 use std::path;
 use std::path::{PathBuf};
+use std::io::{Seek, SeekFrom, Write};
+use std::io::Read;
 use crate::KvStoreError;
 
+#[derive(Debug)]
+struct LogPointer {
+    offset: u64,
+    length: u64,
+}
+
+type Index = HashMap<String, LogPointer>;
+
 /// The `KvStore` stores string key/value pairs.
-///
-/// Key/value pairs are stored in a `HashMap` in memory and not persisted to disk.
-///
-/// Example:
-///
-/// ```rust
-/// # use kvs::KvStore;
-/// let mut store = KvStore::new();
-/// store.set("key".to_owned(), "value".to_owned());
-/// let val = store.get("key".to_owned());
-/// assert_eq!(val, Some("value".to_owned()));
 /// ```
 pub struct KvStore {
-    map: HashMap<String, String>,
+    index: Index,
     log_file_path: PathBuf,
 }
 
@@ -34,91 +32,122 @@ impl KvStore {
     pub fn open(path: &path::Path) -> Result<KvStore> {
         let mut path_buf = PathBuf::from(path);
         path_buf.push("kvs_log");
-        path_buf.set_extension("txt");
+        path_buf.set_extension("wal"); // stand for write ahead log
 
-        let file = OpenOptions::new()
+        OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(&path_buf)
             .expect("failed to create file using path_buf");
 
-        let mut map = HashMap::new();
 
-        for line in BufReader::new(file).lines() {
-            let cmd: Command = serde_json::from_str(&line?)?;
-
-            if let Command::Set { key, value } = &cmd {
-                map.insert(key.to_string(), value.to_string());
-            };
-
-            if let Command::Remove { key } = &cmd {
-                map.remove(&key.to_string());
-            };
-        }
+        let index = KvStore::build_index(&path_buf)?;
 
         return Ok(KvStore {
-            map,
+            index,
             log_file_path: path_buf,
         });
     }
 
+    // private function to build an initial index
+    fn build_index(pathBuf: &PathBuf) -> Result<Index> {
+        let mut index = HashMap::new();
+        let log_file = KvStore::get_log_file(pathBuf)?;
+
+        loop {
+            let offset = BufReader::new(log_file).seek(SeekFrom::Current(0))?;
+            let result = bincode::deserialize_from(log_file);
+
+            match result {
+                Ok(cmd) =>
+                    match cmd {
+                        Command::Set{ key, value: _ } => {
+                            let cmd_length = BufReader::new(log_file).seek(SeekFrom::Current(0))? - offset;
+                            index.insert(
+                                key,
+                                LogPointer{
+                                offset,
+                                length: cmd_length
+                            });
+                        }
+                        Command::Remove{ key } => {
+                            index.remove(&key);
+                        }
+                    }
+                Err(_) => break
+            }
+        }
+
+
+        Ok(index)
+    }
+
+        /// get log file buf
+    fn get_log_file(pathBuf: &PathBuf) -> Result<File> {
+        let file = OpenOptions::new().append(true).open(pathBuf)?;
+        Ok(file)
+    }
+
     /// Get value by key
     pub fn get(&self, key: String) -> Result<Option<String>> {
-        Ok(self.map.get(&key).cloned())
-        // match self.map.get(&key).cloned() {
-        //     None => Ok(None),
-        //     v => Ok(v)
-        // }
+        match self.index.get(&key) {
+            None => Ok(None),
+            Some(LogPointer{
+                offset,
+                length: _
+            }) => {
+                let mut file = self.log_file()?;
+                file.seek(SeekFrom::Start(*offset))?;
+                if let Command::Set{key: _, value: value} = bincode::deserialize_from(file)? {
+                    return Ok(Some(value));
+                }
+                Err(KvStoreError::UnknownError)
+            }
+        }
     }
 
     /// Set Value for the key and persist it in to log file
     /// If there is value associated with the key, its value wil be overrided
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let set_cmd = Command::Set { key, value };
-        self.write_cmd_to_log(&set_cmd)?;
+        let set_cmd = Command::Set { key: key.clone(), value };
+        let (offset, length) = self.write_cmd_to_log(set_cmd)?;
 
-        // to avoid error of "value used here after move"
-        if let Command::Set { key, value } = set_cmd {
-            self.map.insert(key, value);
-        }
-        Ok(())
+        let lp = LogPointer { offset, length };
+        self.index.insert(key, lp);
+
+       Ok(())
     }
 
     /// Remove a given key.
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let remove_cmd = Command::Remove { key };
-        self.write_cmd_to_log(&remove_cmd)?;
+        let remove_cmd = Command::Remove { key: key.clone() };
+        self.write_cmd_to_log(remove_cmd)?;
 
-        // to avoid error of "value used here after move"
-        if let Command::Remove { key } = remove_cmd {
-            match self.map.remove(&key) {
-                None =>
-                    return Err(KvStoreError::KeyNotFoundError),
-                Some(_value) =>
-                    return Ok(())
-            }
+        match self.index.remove(&key) {
+            None =>
+                return Err(KvStoreError::KeyNotFoundError),
+            Some(_value) =>
+                return Ok(())
         }
-
-        Ok(())
     }
 
     /// write command to log file
-    fn write_cmd_to_log(&self, cmd: &Command) -> Result<()> {
-        let mut cmd_serialized = serde_json::to_string(&cmd)?;
-        cmd_serialized.push('\n');
+    fn write_cmd_to_log(&self, cmd: Command) -> Result<((u64, u64))> {
+        let serialized = bincode::serialize(&cmd)?;
+        let serialized_size = serialized.len();
+        let mut file = self.log_file()?;
+        let offset = file.seek(SeekFrom::End(0))?;
+        file.write(&bincode::serialize(&serialized_size)?)?;
+        file.write(&serialized)?;
+        let cur_offset = file.seek(SeekFrom::End(0))?;
 
-        let mut stream = BufWriter::new(self.log_file()?);
-        stream.write(cmd_serialized.as_bytes())?;
-
-
-        Ok(())
+        Ok((offset, cur_offset - offset))
     }
 
     /// get log file buf
     fn log_file(&self) -> Result<File> {
-        let file_handler = OpenOptions::new().append(true).open(&self.log_file_path)?;
-        Ok(file_handler)
+        KvStore::get_log_file(&self.log_file_path)
     }
 }
 

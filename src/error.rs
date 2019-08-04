@@ -18,6 +18,10 @@ pub enum KvStoreError {
     /// Serde errors.
     #[fail(display = "{}", _0)]
     Serde(#[cause] serde_json::Error),
+
+    #[fail(display = "Bincode error: {}", _0)]
+    BincodeError(#[fail(cause)] bincode::Error),
+
 }
 
 impl From<std::io::Error> for KvStoreError {
@@ -29,6 +33,12 @@ impl From<std::io::Error> for KvStoreError {
 impl From<serde_json::Error> for KvStoreError {
     fn from(err: serde_json::Error) -> KvStoreError {
         KvStoreError::Serde(err)
+    }
+}
+
+impl From<bincode::Error> for KvStoreError {
+    fn from(err: bincode::Error) -> KvStoreError {
+        KvStoreError::BincodeError(err)
     }
 }
 
