@@ -2,15 +2,15 @@
 
 use crate::error::Result;
 // use crate::Command;
+use crate::KvStoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader};
-use std::path;
-use std::path::{PathBuf};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::BufReader;
 use std::io::Read;
-use crate::KvStoreError;
+use std::io::{Seek, SeekFrom, Write};
+use std::path;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 struct LogPointer {
@@ -41,7 +41,6 @@ impl KvStore {
             .open(&path_buf)
             .expect("failed to create file using path_buf");
 
-
         let index = KvStore::build_index(&path_buf)?;
 
         return Ok(KvStore {
@@ -51,41 +50,41 @@ impl KvStore {
     }
 
     // private function to build an initial index
-    fn build_index(pathBuf: &PathBuf) -> Result<Index> {
+    fn build_index(path_buf: &PathBuf) -> Result<Index> {
         let mut index = HashMap::new();
-        let log_file = KvStore::get_log_file(pathBuf)?;
+        let log_file = KvStore::get_log_file(path_buf)?;
+        let mut log_file_buf_reader = BufReader::new(log_file);
 
         loop {
-            let offset = BufReader::new(log_file).seek(SeekFrom::Current(0))?;
-            let result = bincode::deserialize_from(log_file);
-
+            let log_file_buf_reader_ref = log_file_buf_reader.by_ref();
+            let offset = log_file_buf_reader_ref.seek(SeekFrom::Current(0))?;
+            let result = bincode::deserialize_from(log_file_buf_reader_ref);
+            let cmd_length = log_file_buf_reader.by_ref().seek(SeekFrom::Current(0))? - offset;
             match result {
-                Ok(cmd) =>
-                    match cmd {
-                        Command::Set{ key, value: _ } => {
-                            let cmd_length = BufReader::new(log_file).seek(SeekFrom::Current(0))? - offset;
-                            index.insert(
-                                key,
-                                LogPointer{
+                Ok(cmd) => match cmd {
+                    Command::Set { key, value: _ } => {
+                        index.insert(
+                            key,
+                            LogPointer {
                                 offset,
-                                length: cmd_length
-                            });
-                        }
-                        Command::Remove{ key } => {
-                            index.remove(&key);
-                        }
+                                length: cmd_length,
+                            },
+                        );
                     }
-                Err(_) => break
+                    Command::Remove { key } => {
+                        index.remove(&key);
+                    }
+                },
+                Err(_) => break,
             }
         }
-
 
         Ok(index)
     }
 
-        /// get log file buf
-    fn get_log_file(pathBuf: &PathBuf) -> Result<File> {
-        let file = OpenOptions::new().append(true).open(pathBuf)?;
+    /// get log file buf
+    fn get_log_file(path_buf: &PathBuf) -> Result<File> {
+        let file = OpenOptions::new().read(true).append(true).open(path_buf)?;
         Ok(file)
     }
 
@@ -93,13 +92,10 @@ impl KvStore {
     pub fn get(&self, key: String) -> Result<Option<String>> {
         match self.index.get(&key) {
             None => Ok(None),
-            Some(LogPointer{
-                offset,
-                length: _
-            }) => {
+            Some(LogPointer { offset, length: _ }) => {
                 let mut file = self.log_file()?;
                 file.seek(SeekFrom::Start(*offset))?;
-                if let Command::Set{key: _, value: value} = bincode::deserialize_from(file)? {
+                if let Command::Set { key: _, value } = bincode::deserialize_from(file)? {
                     return Ok(Some(value));
                 }
                 Err(KvStoreError::UnknownError)
@@ -110,13 +106,16 @@ impl KvStore {
     /// Set Value for the key and persist it in to log file
     /// If there is value associated with the key, its value wil be overrided
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let set_cmd = Command::Set { key: key.clone(), value };
+        let set_cmd = Command::Set {
+            key: key.clone(),
+            value,
+        };
         let (offset, length) = self.write_cmd_to_log(set_cmd)?;
 
         let lp = LogPointer { offset, length };
         self.index.insert(key, lp);
 
-       Ok(())
+        Ok(())
     }
 
     /// Remove a given key.
@@ -125,20 +124,16 @@ impl KvStore {
         self.write_cmd_to_log(remove_cmd)?;
 
         match self.index.remove(&key) {
-            None =>
-                return Err(KvStoreError::KeyNotFoundError),
-            Some(_value) =>
-                return Ok(())
+            None => return Err(KvStoreError::KeyNotFoundError),
+            Some(_value) => return Ok(()),
         }
     }
 
     /// write command to log file
     fn write_cmd_to_log(&self, cmd: Command) -> Result<((u64, u64))> {
         let serialized = bincode::serialize(&cmd)?;
-        let serialized_size = serialized.len();
         let mut file = self.log_file()?;
         let offset = file.seek(SeekFrom::End(0))?;
-        file.write(&bincode::serialize(&serialized_size)?)?;
         file.write(&serialized)?;
         let cur_offset = file.seek(SeekFrom::End(0))?;
 
@@ -151,7 +146,7 @@ impl KvStore {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
     Set { key: String, value: String },
     Remove { key: String },

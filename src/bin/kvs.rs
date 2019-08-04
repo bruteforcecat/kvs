@@ -44,11 +44,10 @@ fn main() -> Result<()> {
         Opt::Get { key } => {
             let kv_store = KvStore::open(&env::current_dir()?)?;
             match kv_store.get(key) {
-                Ok(val) =>
-                    match val {
-                        Some(val) => println!("{}", val),
-                        None => println!("Key not found")
-                    },
+                Ok(val) => match val {
+                    Some(val) => println!("{}", val),
+                    None => println!("Key not found"),
+                },
                 Err(e) => println!("{}", e),
             };
             process::exit(0)

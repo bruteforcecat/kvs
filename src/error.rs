@@ -19,9 +19,9 @@ pub enum KvStoreError {
     #[fail(display = "{}", _0)]
     Serde(#[cause] serde_json::Error),
 
+    /// Bincode Errors.
     #[fail(display = "Bincode error: {}", _0)]
     BincodeError(#[fail(cause)] bincode::Error),
-
 }
 
 impl From<std::io::Error> for KvStoreError {
