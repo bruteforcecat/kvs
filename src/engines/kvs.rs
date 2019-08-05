@@ -2,15 +2,20 @@
 
 use crate::error::Result;
 // use crate::Command;
+use super::KvsEngine;
 use crate::KvStoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
 use std::io::Read;
 use std::io::{Seek, SeekFrom, Write};
 use std::path;
 use std::path::PathBuf;
+
+// TODO move to config
+const REDUNDANT_LOG_SIZE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10 mebibyte threshold in bytes to trigger compaction
 
 #[derive(Debug)]
 struct LogPointer {
@@ -25,6 +30,7 @@ type Index = HashMap<String, LogPointer>;
 pub struct KvStore {
     index: Index,
     log_file_path: PathBuf,
+    redundant_log_size: u64,
 }
 
 impl KvStore {
@@ -46,6 +52,7 @@ impl KvStore {
         return Ok(KvStore {
             index,
             log_file_path: path_buf,
+            redundant_log_size: 0,
         });
     }
 
@@ -88,8 +95,62 @@ impl KvStore {
         Ok(file)
     }
 
+    /// compact log to minimize disk usage
+    fn compact(&mut self) -> Result<()> {
+        let current_log_file_path = self.log_file_path.to_str().unwrap();
+        let mut temp_file_path = PathBuf::from(current_log_file_path);
+        temp_file_path.set_file_name(".temp.wal");
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_file_path)
+            .expect("failed to create file using path_buf");
+
+        // to avoid ownership problem
+        let keys = self.index.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let value = self.get(key.clone())?.unwrap();
+            let serialized = bincode::serialize(&Command::Set {
+                key: key.clone(),
+                value,
+            })?;
+            file.write(&serialized)?;
+        }
+
+        let current_log_file_path2 = self.log_file_path.to_str().unwrap();
+        file.flush()?;
+        fs::rename(current_log_file_path2, "./old.wal")?;
+        fs::rename(temp_file_path.to_str().unwrap(), current_log_file_path2)?;
+        self.index = KvStore::build_index(&self.log_file_path)?;
+        self.redundant_log_size = 0;
+
+        Ok(())
+    }
+
+    /// write command to log file
+    fn write_cmd_to_log(&mut self, cmd: Command) -> Result<((u64, u64))> {
+        if self.redundant_log_size > REDUNDANT_LOG_SIZE_THRESHOLD {
+            self.compact()?;
+        }
+        let serialized = bincode::serialize(&cmd)?;
+        let mut file = self.log_file()?;
+        let offset = file.seek(SeekFrom::End(0))?;
+        file.write(&serialized)?;
+        let cur_offset = file.seek(SeekFrom::End(0))?;
+        Ok((offset, cur_offset - offset))
+    }
+
+    /// get log file buf
+    fn log_file(&self) -> Result<File> {
+        KvStore::get_log_file(&self.log_file_path)
+    }
+}
+
+impl KvsEngine for KvStore {
     /// Get value by key
-    pub fn get(&self, key: String) -> Result<Option<String>> {
+    fn get(&mut self, key: String) -> Result<Option<String>> {
         match self.index.get(&key) {
             None => Ok(None),
             Some(LogPointer { offset, length: _ }) => {
@@ -105,7 +166,12 @@ impl KvStore {
 
     /// Set Value for the key and persist it in to log file
     /// If there is value associated with the key, its value wil be overrided
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let original_val = self.get(key.clone())?;
+        if original_val.is_some() {
+            self.redundant_log_size += self.index.get(&key).expect("key must be in index").length;
+        }
+
         let set_cmd = Command::Set {
             key: key.clone(),
             value,
@@ -119,30 +185,18 @@ impl KvStore {
     }
 
     /// Remove a given key.
-    pub fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&mut self, key: String) -> Result<()> {
         let remove_cmd = Command::Remove { key: key.clone() };
         self.write_cmd_to_log(remove_cmd)?;
 
         match self.index.remove(&key) {
             None => return Err(KvStoreError::KeyNotFoundError),
-            Some(_value) => return Ok(()),
+            Some(cmd) => {
+                self.redundant_log_size += cmd.length;
+
+                return Ok(());
+            }
         }
-    }
-
-    /// write command to log file
-    fn write_cmd_to_log(&self, cmd: Command) -> Result<((u64, u64))> {
-        let serialized = bincode::serialize(&cmd)?;
-        let mut file = self.log_file()?;
-        let offset = file.seek(SeekFrom::End(0))?;
-        file.write(&serialized)?;
-        let cur_offset = file.seek(SeekFrom::End(0))?;
-
-        Ok((offset, cur_offset - offset))
-    }
-
-    /// get log file buf
-    fn log_file(&self) -> Result<File> {
-        KvStore::get_log_file(&self.log_file_path)
     }
 }
 

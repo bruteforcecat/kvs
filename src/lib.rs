@@ -6,8 +6,8 @@ extern crate failure_derive;
 
 extern crate serde_json;
 
+pub use engines::{KvStore, KvsEngine};
 pub use error::{KvStoreError, Result};
-pub use kv::KvStore;
 
+mod engines;
 mod error;
-mod kv;
