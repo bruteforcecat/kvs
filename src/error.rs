@@ -11,6 +11,9 @@ pub enum KvStoreError {
     #[fail(display = "Key not found")]
     KeyNotFoundError,
 
+    // /// Error for a key that can't be found in KV Store
+    // #[fail(display = "Key not found")]
+    // KeyNotFoundError,
     /// IO Error
     #[fail(display = "IOError {}", _0)]
     IOError(#[cause] std::io::Error),
