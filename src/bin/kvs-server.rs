@@ -70,15 +70,27 @@ fn main() -> Result<()> {
 
     match engine {
         Some(Engine::kvs) => {
-            let server = KvsServer::new(KvStore::open(&pathbuf)?);
+            let engine_logger = root_logger.clone();
+            let server = KvsServer::new(
+                KvStore::open_with_logger(&pathbuf, engine_logger)?,
+                root_logger,
+            );
             server.run(addr)
         }
         Some(Engine::sled) => {
-            let server = KvsServer::new(KvStore::open(&pathbuf)?);
+            let engine_logger = root_logger.clone();
+            let server = KvsServer::new(
+                KvStore::open_with_logger(&pathbuf, engine_logger)?,
+                root_logger,
+            );
             server.run(addr)
         }
         None => {
-            let server = KvsServer::new(KvStore::open(&pathbuf)?);
+            let engine_logger = root_logger.clone();
+            let server = KvsServer::new(
+                KvStore::open_with_logger(&pathbuf, engine_logger)?,
+                root_logger,
+            );
             server.run(addr)
         }
     }

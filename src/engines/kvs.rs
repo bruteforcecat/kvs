@@ -3,8 +3,11 @@
 use crate::error::Result;
 // use crate::Command;
 use super::KvsEngine;
-use crate::KvStoreError;
+use crate::KvsError;
 use serde::{Deserialize, Serialize};
+use slog::Logger;
+use slog::*;
+use slog_stdlog;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
@@ -31,11 +34,21 @@ pub struct KvStore {
     index: Index,
     log_file_path: PathBuf,
     redundant_log_size: u64,
+    logger: Logger,
 }
 
 impl KvStore {
     /// Create a `KvStore` from a file path
     pub fn open(path: &path::Path) -> Result<KvStore> {
+        KvStore::create(path, None)
+    }
+
+    /// Create a `KvStore` with logger passed in
+    pub fn open_with_logger(path: &path::Path, logger: Logger) -> Result<KvStore> {
+        KvStore::create(path, Some(logger))
+    }
+
+    fn create(path: &path::Path, logger: Option<Logger>) -> Result<KvStore> {
         let mut path_buf = PathBuf::from(path);
         path_buf.push("kvs_log");
         path_buf.set_extension("wal"); // stand for write ahead log
@@ -48,8 +61,9 @@ impl KvStore {
             .expect("failed to create file using path_buf");
 
         let index = KvStore::build_index(&path_buf)?;
-
+        let kv_store_logger = logger.unwrap_or(Logger::root(slog_stdlog::StdLog.fuse(), o!()));
         return Ok(KvStore {
+            logger: kv_store_logger,
             index,
             log_file_path: path_buf,
             redundant_log_size: 0,
@@ -159,7 +173,7 @@ impl KvsEngine for KvStore {
                 if let Command::Set { key: _, value } = bincode::deserialize_from(file)? {
                     return Ok(Some(value));
                 }
-                Err(KvStoreError::UnknownError)
+                Err(KvsError::UnknownError)
             }
         }
     }
@@ -167,6 +181,7 @@ impl KvsEngine for KvStore {
     /// Set Value for the key and persist it in to log file
     /// If there is value associated with the key, its value wil be overrided
     fn set(&mut self, key: String, value: String) -> Result<()> {
+        debug!(self.logger, "Kvs set");
         let original_val = self.get(key.clone())?;
         if original_val.is_some() {
             self.redundant_log_size += self.index.get(&key).expect("key must be in index").length;
@@ -190,7 +205,7 @@ impl KvsEngine for KvStore {
         self.write_cmd_to_log(remove_cmd)?;
 
         match self.index.remove(&key) {
-            None => return Err(KvStoreError::KeyNotFoundError),
+            None => return Err(KvsError::KeyNotFoundError),
             Some(cmd) => {
                 self.redundant_log_size += cmd.length;
 
